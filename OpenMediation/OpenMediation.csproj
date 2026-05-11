@@ -12,7 +12,7 @@
 	  <GenerateDocumentationFile>true</GenerateDocumentationFile>
 	  <AllowUnsafeBlocks>false</AllowUnsafeBlocks>
 	  
-	  <!-- Package Metadata for NuGet and GitHub -->
+	  <!-- Package Metadata for NuGet -->
 	  <PackageId>OpenMediation</PackageId>
 	  <Version>1.0.0</Version>
 	  <Authors>WaleedAwn</Authors>
@@ -22,10 +22,12 @@
 		  Features compiled expression-tree dispatch, optimized pipeline behavior support,
 		  and zero dynamic-dispatch overhead.
 	  </Description>
+	  <!-- Automatically creates a .nupkg file in the output folder every time you build the project -->
+	  <GeneratePackageOnBuild>true</GeneratePackageOnBuild>
 	  <PackageTags>mediator;cqrs;pipeline;notifications;dotnet;high-performance</PackageTags>
 	  <PackageLicenseExpression>MIT</PackageLicenseExpression>
 	  
-	  <!-- This links  README to the NuGet page -->
+	  <!-- This links README to the NuGet page -->
 	  <PackageReadmeFile>README.md</PackageReadmeFile>
 	  <RepositoryUrl>https://github.com/WaleedAwn/OpenMediation.git</RepositoryUrl>
 	  <PackageProjectUrl>https://github.com/WaleedAwn/OpenMediation</PackageProjectUrl>
@@ -37,10 +39,10 @@
 	
 	<ItemGroup>
 		<!-- Use the stable-match version for .NET 10 -->
-		<PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="10.0.0-preview.1.25080.5" />
+		<PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="10.0.7" />
 	</ItemGroup>
 	
-	<!-- This tells NuGet to include your README file in the package -->
+	<!-- This tells NuGet to include  README file in the package -->
 	<ItemGroup Condition="Exists('README.md')">
 		<None Include="README.md" Pack="true" PackagePath="\" />
 	</ItemGroup>
