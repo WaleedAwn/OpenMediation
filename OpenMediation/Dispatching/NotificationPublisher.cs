@@ -4,24 +4,26 @@ using Microsoft.Extensions.DependencyInjection;
 
 namespace OpenMediation.Dispatching;
 
-public sealed class NotificationPublisher : IPublisher
+internal sealed class NotificationPublisher(
+    IServiceProvider serviceProvider,
+    INotificationExecutionPlanCache executionPlanCache) : IPublisher
 {
-    private readonly IServiceProvider _serviceProvider;
-
-    public NotificationPublisher(IServiceProvider serviceProvider)
-    {
-        _serviceProvider = serviceProvider;
-    }
-
     public async Task Publish(INotification notification, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(notification);
-        var handlerType = typeof(INotificationHandler<>).MakeGenericType(notification.GetType());
-        var handlers = _serviceProvider.GetServices(handlerType).Cast<object>().ToList();
 
-        foreach (var handler in handlers)
+        NotificationExecutionPlan plan = executionPlanCache.GetOrAdd(notification.GetType());
+
+        object[] handlers = [.. serviceProvider.GetServices(plan.HandlerServiceType)];
+
+        if (handlers.Length is 0) return;
+
+        UntypedNotificationHandlerInvoker invoker = plan.HandlerInvoker;
+        object concreteNotif = notification;
+
+        foreach (object handler in handlers)
         {
-            await ((dynamic)handler).Handle((dynamic)notification, cancellationToken);
+            await invoker(handler, concreteNotif, cancellationToken).ConfigureAwait(false);
         }
     }
 }

@@ -6,18 +6,20 @@ using System.Reflection;
 
 namespace OpenMediation.Dispatching;
 
-public sealed class RequestExecutionPlanCache : IRequestExecutionPlanCache
+// NOTE ON NATIVE AOT:
+// Expression.Compile() uses Reflection.Emit and is NOT compatible with Native AOT.
+// The cache sits behind IRequestExecutionPlanCache so a source-generated AOT-safe
+// implementation can be swapped in at registration time without any public API change.
+
+internal sealed class RequestExecutionPlanCache : IRequestExecutionPlanCache
 {
-    private static readonly ConcurrentDictionary<ExecutionPlanCacheKey, RequestExecutionPlan> Cache = new();
+    // Static so the cache survives ServiceProvider rebuilds in test scenarios.
+    private static readonly ConcurrentDictionary<ExecutionPlanCacheKey, RequestExecutionPlan> s_cache = new();
 
     public RequestExecutionPlan GetOrAdd(Type requestType, Type responseType)
     {
-        ArgumentNullException.ThrowIfNull(requestType);
-        ArgumentNullException.ThrowIfNull(responseType);
-
         var key = new ExecutionPlanCacheKey(requestType, responseType);
-
-        return Cache.GetOrAdd(key, static key => BuildExecutionPlan(key.RequestType, key.ResponseType));
+        return s_cache.GetOrAdd(key, static k => BuildExecutionPlan(k.RequestType, k.ResponseType));
     }
 
     private static RequestExecutionPlan BuildExecutionPlan(Type requestType, Type responseType)
@@ -25,71 +27,85 @@ public sealed class RequestExecutionPlanCache : IRequestExecutionPlanCache
         Type handlerServiceType = typeof(IRequestHandler<,>).MakeGenericType(requestType, responseType);
         Type behaviorServiceType = typeof(IPipelineBehavior<,>).MakeGenericType(requestType, responseType);
 
-        UntypedHandlerInvoker handlerInvoker = BuildHandlerInvoker(requestType, responseType, handlerServiceType);
-        UntypedBehaviorInvoker behaviorInvoker = BuildBehaviorInvoker(requestType, responseType, behaviorServiceType);
-
         return new RequestExecutionPlan(
             handlerServiceType,
             behaviorServiceType,
-            handlerInvoker,
-            behaviorInvoker);
+            BuildHandlerInvoker(requestType, responseType, handlerServiceType),
+            BuildBehaviorInvoker(requestType, responseType, behaviorServiceType));
     }
 
-    private static UntypedHandlerInvoker BuildHandlerInvoker(Type requestType, Type responseType, Type handlerServiceType)
+    // AOT: Replace with a source-generated switch/dictionary over known TRequest types.
+    private static UntypedHandlerInvoker BuildHandlerInvoker(
+        Type requestType, Type responseType, Type handlerServiceType)
     {
-        MethodInfo handleMethod = handlerServiceType.GetMethod("Handle", [requestType, typeof(CancellationToken)])
-            ?? throw new InvalidOperationException("Could not find Handle method.");
+        MethodInfo handleMethod = handlerServiceType.GetMethod(
+            "Handle", [requestType, typeof(CancellationToken)])!;
 
-        ParameterExpression handlerParameter = Expression.Parameter(typeof(object), "handler");
-        ParameterExpression requestParameter = Expression.Parameter(typeof(object), "request");
-        ParameterExpression cancellationTokenParameter = Expression.Parameter(typeof(CancellationToken), "cancellationToken");
+        ParameterExpression handlerParam = Expression.Parameter(typeof(object), "handler");
+        ParameterExpression requestParam = Expression.Parameter(typeof(object), "request");
+        ParameterExpression tokenParam = Expression.Parameter(typeof(CancellationToken), "cancellationToken");
 
-        UnaryExpression castedHandler = Expression.Convert(handlerParameter, handlerServiceType);
-        UnaryExpression castedRequest = Expression.Convert(requestParameter, requestType);
+        MethodInfo boxMethod = typeof(RequestExecutionPlanCache)
+            .GetMethod(nameof(BoxTaskResultAsync), BindingFlags.Public | BindingFlags.Static)!
+            .MakeGenericMethod(responseType);
 
-        MethodCallExpression handleCall = Expression.Call(castedHandler, handleMethod, castedRequest, cancellationTokenParameter);
+        Expression body = Expression.Call(
+            boxMethod,
+            Expression.Call(
+                Expression.Convert(handlerParam, handlerServiceType),
+                handleMethod,
+                Expression.Convert(requestParam, requestType),
+                tokenParam));
 
-        MethodInfo boxTaskResultMethod = typeof(RequestExecutionPlanCache)
-                .GetMethod(nameof(BoxTaskResultAsync), BindingFlags.Static | BindingFlags.Public)!
-                .MakeGenericMethod(responseType);
-
-        return Expression.Lambda<UntypedHandlerInvoker>(Expression.Call(boxTaskResultMethod, handleCall),
-            handlerParameter, requestParameter, cancellationTokenParameter).Compile();
+        return Expression.Lambda<UntypedHandlerInvoker>(body, handlerParam, requestParam, tokenParam)
+                         .Compile();
     }
 
-    private static UntypedBehaviorInvoker BuildBehaviorInvoker(Type requestType, Type responseType, Type behaviorServiceType)
+    // AOT: Replace with a source-generated switch/dictionary over known TRequest types.
+    private static UntypedBehaviorInvoker BuildBehaviorInvoker(
+        Type requestType, Type responseType, Type behaviorServiceType)
     {
-        Type requestHandlerDelegateType = typeof(RequestHandlerDelegate<>).MakeGenericType(responseType);
-        MethodInfo handleMethod = behaviorServiceType.GetMethod("Handle", [requestType, requestHandlerDelegateType, typeof(CancellationToken)])
-            ?? throw new InvalidOperationException("Could not find Handle method.");
+        Type nextDelegateType = typeof(RequestHandlerDelegate<>).MakeGenericType(responseType);
 
-        ParameterExpression behaviorParameter = Expression.Parameter(typeof(object), "behavior");
-        ParameterExpression requestParameter = Expression.Parameter(typeof(object), "request");
-        ParameterExpression nextParameter = Expression.Parameter(typeof(Func<Task<object?>>), "next");
-        ParameterExpression cancellationTokenParameter = Expression.Parameter(typeof(CancellationToken), "cancellationToken");
+        MethodInfo handleMethod = behaviorServiceType.GetMethod(
+            "Handle", [requestType, nextDelegateType, typeof(CancellationToken)])!;
 
-        MethodInfo adaptNextMethod = typeof(RequestExecutionPlanCache).GetMethod(nameof(AdaptNext), BindingFlags.Static | BindingFlags.Public)!.MakeGenericMethod(responseType);
-        MethodCallExpression typedNextDelegate = Expression.Call(adaptNextMethod, nextParameter);
+        ParameterExpression behaviorParam = Expression.Parameter(typeof(object), "behavior");
+        ParameterExpression requestParam = Expression.Parameter(typeof(object), "request");
+        ParameterExpression nextParam = Expression.Parameter(typeof(Func<CancellationToken, Task<object?>>), "next");
+        ParameterExpression tokenParam = Expression.Parameter(typeof(CancellationToken), "cancellationToken");
 
-        MethodCallExpression handleCall = Expression.Call(Expression.Convert(behaviorParameter, behaviorServiceType),
-            handleMethod, Expression.Convert(requestParameter, requestType), typedNextDelegate, cancellationTokenParameter);
+        MethodInfo adaptNextMethod = typeof(RequestExecutionPlanCache)
+            .GetMethod(nameof(AdaptNext), BindingFlags.Public | BindingFlags.Static)!
+            .MakeGenericMethod(responseType);
 
-        MethodInfo boxTaskResultMethod = typeof(RequestExecutionPlanCache).GetMethod(nameof(BoxTaskResultAsync), BindingFlags.Static | BindingFlags.Public)!.MakeGenericMethod(responseType);
+        MethodInfo boxMethod = typeof(RequestExecutionPlanCache)
+            .GetMethod(nameof(BoxTaskResultAsync), BindingFlags.Public | BindingFlags.Static)!
+            .MakeGenericMethod(responseType);
 
-        return Expression.Lambda<UntypedBehaviorInvoker>(Expression.Call(boxTaskResultMethod, handleCall),
-            behaviorParameter, requestParameter, nextParameter, cancellationTokenParameter).Compile();
+        Expression body = Expression.Call(
+            boxMethod,
+            Expression.Call(
+                Expression.Convert(behaviorParam, behaviorServiceType),
+                handleMethod,
+                Expression.Convert(requestParam, requestType),
+                Expression.Call(adaptNextMethod, nextParam),
+                tokenParam));
+
+        return Expression.Lambda<UntypedBehaviorInvoker>(body, behaviorParam, requestParam, nextParam, tokenParam)
+                         .Compile();
     }
 
-    public static async Task<object?> BoxTaskResultAsync<TResponse>(Task<TResponse> task) => await task.ConfigureAwait(false);
+    public static async Task<object?> BoxTaskResultAsync<TResponse>(Task<TResponse> task)
+        => await task.ConfigureAwait(false);
 
-    public static RequestHandlerDelegate<TResponse> AdaptNext<TResponse>(Func<Task<object?>> next)
-    {
-        return async () =>
+    public static RequestHandlerDelegate<TResponse> AdaptNext<TResponse>(
+        Func<CancellationToken, Task<object?>> next)
+        => async ct =>
         {
-            object? result = await next().ConfigureAwait(false);
+            object? result = await next(ct).ConfigureAwait(false);
             return result is null ? default! : (TResponse)result;
         };
-    }
 
     private readonly record struct ExecutionPlanCacheKey(Type RequestType, Type ResponseType);
 }

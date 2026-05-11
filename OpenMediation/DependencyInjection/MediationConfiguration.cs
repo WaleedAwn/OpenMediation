@@ -3,47 +3,72 @@ using Microsoft.Extensions.DependencyInjection.Extensions;
 using OpenMediation.Abstractions;
 using OpenMediation.Dispatching;
 using OpenMediation.Pipeline;
-using System;
-using System.Collections.Generic;
 using System.Reflection;
-using System.Text;
 
 namespace OpenMediation.DependencyInjection;
 
 public static class MediationConfiguration
 {
-    public static IServiceCollection AddOpenMediation(this IServiceCollection services, Assembly[] assemblies)
+    /// <summary>
+    /// Registers OpenMediation and scans <paramref name="assemblies"/> for handlers.
+    /// Usage: services.AddOpenMediation(typeof(MyHandler).Assembly)
+    /// </summary>
+    public static IServiceCollection AddOpenMediation(
+        this IServiceCollection services,
+        params ReadOnlySpan<Assembly> assemblies)
     {
+        // Singletons: safe to share across scopes, survive test rebuilds.
         services.AddSingleton<IRequestExecutionPlanCache, RequestExecutionPlanCache>();
+        services.AddSingleton<INotificationExecutionPlanCache, NotificationExecutionPlanCache>();
+
+        // Scoped: participate in the ambient unit-of-work / DbContext lifecycle.
         services.AddScoped<ISender, RequestDispatcher>();
         services.AddScoped<IPublisher, NotificationPublisher>();
         services.AddScoped<IMediator, Mediator>();
 
-        RegisterHandlers(services, assemblies, typeof(IRequestHandler<,>));
-        RegisterHandlers(services, assemblies, typeof(INotificationHandler<>));
+        foreach (Assembly assembly in assemblies)
+        {
+            RegisterHandlers(services, assembly, typeof(IRequestHandler<,>));
+            RegisterHandlers(services, assembly, typeof(INotificationHandler<>));
+        }
 
         return services;
     }
 
-    public static IServiceCollection AddOpenMediationBehavior(this IServiceCollection services, Type behaviorType)
+    /// <summary>
+    /// Registers an open-generic pipeline behavior.
+    /// Behaviors execute in registration order (first-registered = outermost).
+    /// Example: services.AddOpenMediationBehavior(typeof(LoggingBehavior&lt;,&gt;))
+    /// </summary>
+    public static IServiceCollection AddOpenMediationBehavior(
+        this IServiceCollection services,
+        Type behaviorType)
     {
+        ArgumentNullException.ThrowIfNull(behaviorType);
         services.AddScoped(typeof(IPipelineBehavior<,>), behaviorType);
         return services;
     }
 
-    private static void RegisterHandlers(IServiceCollection services, Assembly[] assemblies, Type openGenericHandlerType)
+    private static void RegisterHandlers(
+        IServiceCollection services,
+        Assembly assembly,
+        Type openGenericHandlerType)
     {
-        var concreteTypes = assemblies.SelectMany(a => a.GetTypes())
-            .Where(t => !t.IsAbstract && !t.IsInterface && !t.ContainsGenericParameters);
-
-        foreach (var implementationType in concreteTypes)
+        foreach (Type implementationType in assembly.GetTypes())
         {
-            var serviceTypes = implementationType.GetInterfaces()
-                .Where(i => i.IsGenericType && i.GetGenericTypeDefinition() == openGenericHandlerType);
+            if (implementationType.IsAbstract
+             || implementationType.IsInterface
+             || implementationType.ContainsGenericParameters)
+                continue;
 
-            foreach (var serviceType in serviceTypes)
+            foreach (Type iface in implementationType.GetInterfaces())
             {
-                services.TryAddEnumerable(ServiceDescriptor.Scoped(serviceType, implementationType));
+                if (!iface.IsGenericType
+                 || iface.GetGenericTypeDefinition() != openGenericHandlerType)
+                    continue;
+
+                services.TryAddEnumerable(
+                    ServiceDescriptor.Scoped(iface, implementationType));
             }
         }
     }

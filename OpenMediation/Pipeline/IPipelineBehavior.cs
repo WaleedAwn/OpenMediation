@@ -1,13 +1,20 @@
 ﻿using OpenMediation.Abstractions;
-using System;
-using System.Collections.Generic;
-using System.Text;
 
 namespace OpenMediation.Pipeline;
 
-public delegate Task<TResponse> RequestHandlerDelegate<TResponse>();
+// <summary>
+/// A delegate that, when invoked, calls the next step in the pipeline
+/// (either the next behavior or the final handler).
+/// CancellationToken is passed through so behaviors can substitute
+/// a linked/timeout token for downstream stages.
+/// </summary>
+public delegate Task<TResponse> RequestHandlerDelegate<TResponse>(CancellationToken cancellationToken);
 
-public interface IPipelineBehavior<in TRequest, TResponse>
+/// <summary>
+/// Represents a middleware behavior that wraps a request/response pair in the pipeline.
+/// Behaviors are executed in registration order (first-registered = outermost).
+/// </summary>
+public interface IPipelineBehavior<TRequest, TResponse>
     where TRequest : IRequest<TResponse>
 {
     Task<TResponse> Handle(
@@ -15,3 +22,4 @@ public interface IPipelineBehavior<in TRequest, TResponse>
         RequestHandlerDelegate<TResponse> next,
         CancellationToken cancellationToken);
 }
+
