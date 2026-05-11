@@ -14,16 +14,19 @@ internal sealed class NotificationPublisher(
 
         NotificationExecutionPlan plan = executionPlanCache.GetOrAdd(notification.GetType());
 
-        object[] handlers = [.. serviceProvider.GetServices(plan.HandlerServiceType)];
+        object?[] handlers = [.. serviceProvider.GetServices(plan.HandlerServiceType)];
 
         if (handlers.Length is 0) return;
 
         UntypedNotificationHandlerInvoker invoker = plan.HandlerInvoker;
-        object concreteNotif = notification;
+        object concreteNotify = notification;
 
-        foreach (object handler in handlers)
+        foreach (object? handler in handlers)
         {
-            await invoker(handler, concreteNotif, cancellationToken).ConfigureAwait(false);
+            if (handler is not null)
+            {
+                await invoker(handler, concreteNotify, cancellationToken).ConfigureAwait(false);
+            }
         }
     }
 }

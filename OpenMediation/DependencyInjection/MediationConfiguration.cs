@@ -7,12 +7,19 @@ using System.Reflection;
 
 namespace OpenMediation.DependencyInjection;
 
+
+
+/// <summary>
+/// Provides extension methods to register OpenMediation services in the <see cref="IServiceCollection"/>.
+/// </summary>
 public static class MediationConfiguration
 {
     /// <summary>
-    /// Registers OpenMediation and scans <paramref name="assemblies"/> for handlers.
-    /// Usage: services.AddOpenMediation(typeof(MyHandler).Assembly)
+    /// Registers OpenMediation core services and scans the provided <paramref name="assemblies"/> for handlers.
     /// </summary>
+    /// <param name="services">The <see cref="IServiceCollection"/> to add the services to.</param>
+    /// <param name="assemblies">The assemblies to scan for <see cref="IRequestHandler{TRequest, TResponse}"/> and <see cref="INotificationHandler{TNotification}"/> implementations.</param>
+    /// <returns>The <see cref="IServiceCollection"/> so that additional calls can be chained.</returns>
     public static IServiceCollection AddOpenMediation(
         this IServiceCollection services,
         params ReadOnlySpan<Assembly> assemblies)
@@ -38,8 +45,11 @@ public static class MediationConfiguration
     /// <summary>
     /// Registers an open-generic pipeline behavior.
     /// Behaviors execute in registration order (first-registered = outermost).
-    /// Example: services.AddOpenMediationBehavior(typeof(LoggingBehavior&lt;,&gt;))
     /// </summary>
+    /// <param name="services">The <see cref="IServiceCollection"/> to add the behavior to.</param>
+    /// <param name="behaviorType">The open-generic type of the behavior (e.g., typeof(LoggingBehavior&lt;,&gt;)).</param>
+    /// <returns>The <see cref="IServiceCollection"/> so that additional calls can be chained.</returns>
+    /// <exception cref="ArgumentNullException">Thrown when <paramref name="behaviorType"/> is null.</exception>
     public static IServiceCollection AddOpenMediationBehavior(
         this IServiceCollection services,
         Type behaviorType)
@@ -49,6 +59,10 @@ public static class MediationConfiguration
         return services;
     }
 
+    /// <summary>
+    /// Internal helper to register handlers from an assembly.
+    /// Private methods do not require XML comments for the compiler.
+    /// </summary>
     private static void RegisterHandlers(
         IServiceCollection services,
         Assembly assembly,

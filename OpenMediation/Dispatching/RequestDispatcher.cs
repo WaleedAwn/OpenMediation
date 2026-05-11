@@ -13,21 +13,26 @@ internal sealed class RequestDispatcher(
     {
         ArgumentNullException.ThrowIfNull(request);
 
-        RequestExecutionPlan plan = executionPlanCache.GetOrAdd(request.GetType(), typeof(TResponse));
+        Type requestType = request.GetType();
+
+        RequestExecutionPlan plan = executionPlanCache.GetOrAdd(requestType, typeof(TResponse));
 
         // Resolve handler — exactly one required.
-        object[] handlers = [.. serviceProvider.GetServices(plan.HandlerServiceType)];
+        object?[] handlers = [.. serviceProvider.GetServices(plan.HandlerServiceType)];
 
         if (handlers.Length is not 1)
-            ThrowHandlerCountException(request.GetType(), handlers.Length);
+            ThrowHandlerCountException(requestType, handlers.Length);
 
-        // Resolve behaviors — empty array is the common case.
-        object[] behaviors = [.. serviceProvider.GetServices(plan.BehaviorServiceType)];
+        // Extract the single handler and ensure it isn't null
+        object handler = handlers[0] ?? throw new InvalidOperationException(
+           $"The registered handler for '{requestType.Name}' resolved to null.");
+
+        // Resolve behaviors — allow nulls in the temporary array
+        object?[] behaviors = [.. serviceProvider.GetServices(plan.BehaviorServiceType)];
 
         UntypedHandlerInvoker handlerInvoker = plan.HandlerInvoker;
         UntypedBehaviorInvoker behaviorInvoker = plan.BehaviorInvoker;
         object concreteRequest = request;
-        object handler = handlers[0];
 
         // Innermost step: call the handler directly.
         Func<CancellationToken, Task<object?>> pipeline =
@@ -37,7 +42,16 @@ internal sealed class RequestDispatcher(
         // Iterating backward avoids allocating a reversed copy.
         for (int i = behaviors.Length - 1; i >= 0; i--)
         {
-            object behavior = behaviors[i];
+            object? behavior = behaviors[i];
+
+            // Strict Check: Throw if a behavior is null instead of skipping.
+            if (behavior is null)
+            {
+                throw new InvalidOperationException(
+                    $"A null behavior was detected in the pipeline for request '{requestType.Name}'. " +
+                    "Check your Dependency Injection registrations for IPipelineBehavior.");
+            }
+
             Func<CancellationToken, Task<object?>> next = pipeline;
             pipeline = ct => behaviorInvoker(behavior, concreteRequest, next, ct);
         }
