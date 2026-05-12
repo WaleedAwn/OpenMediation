@@ -24,6 +24,7 @@
 	  </Description>
 	  <!-- Automatically creates a .nupkg file in the output folder every time you build the project -->
 	  <GeneratePackageOnBuild>true</GeneratePackageOnBuild>
+	  <PackageOutputPath>C:\MyLocalNuGet</PackageOutputPath>
 	  <PackageTags>mediator;cqrs;pipeline;notifications;dotnet;high-performance</PackageTags>
 	  <PackageLicenseExpression>MIT</PackageLicenseExpression>
 	  
